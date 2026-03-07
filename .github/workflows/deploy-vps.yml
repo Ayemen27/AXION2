@@ -1,0 +1,123 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# AXION — VPS Deployment Workflow
+# نشر تلقائي على VPS عند push على main branch
+# ══════════════════════════════════════════════════════════════════════════════
+
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # يسمح بالتشغيل اليدوي
+
+jobs:
+  deploy:
+    name: 🚀 Deploy to VPS
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: 📚 Install Dependencies
+        run: npm ci
+
+      - name: 🏗️ Build for Production
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+      - name: 📦 Create Deployment Package
+        run: |
+          tar -czf axion-build.tar.gz dist/
+          echo "Package size: $(du -h axion-build.tar.gz | cut -f1)"
+
+      - name: 🔑 Setup SSH Key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+
+      - name: 📤 Deploy to VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PATH: ${{ secrets.VPS_PATH || '/var/www/axion' }}
+        run: |
+          # إنشاء مجلد مؤقت للنشر
+          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST "mkdir -p $VPS_PATH/releases/$(date +%Y%m%d_%H%M%S)"
+          
+          # رفع الملفات
+          scp axion-build.tar.gz $VPS_USER@$VPS_HOST:$VPS_PATH/releases/$(date +%Y%m%d_%H%M%S)/
+          
+          # فك الضغط وتفعيل النسخة الجديدة
+          ssh $VPS_USER@$VPS_HOST << 'EOF'
+            set -e
+            RELEASE_DIR="$VPS_PATH/releases/$(date +%Y%m%d_%H%M%S)"
+            cd $RELEASE_DIR
+            tar -xzf axion-build.tar.gz
+            rm axion-build.tar.gz
+            
+            # Backup old version
+            if [ -L "$VPS_PATH/current" ]; then
+              BACKUP_DIR="$VPS_PATH/backups/$(date +%Y%m%d_%H%M%S)"
+              mkdir -p $BACKUP_DIR
+              cp -r $VPS_PATH/current/* $BACKUP_DIR/
+            fi
+            
+            # Switch to new version (atomic)
+            ln -sfn $RELEASE_DIR/dist $VPS_PATH/current
+            
+            # Cleanup old releases (keep last 5)
+            cd $VPS_PATH/releases
+            ls -t | tail -n +6 | xargs -r rm -rf
+            
+            # Reload nginx
+            sudo systemctl reload nginx
+            
+            echo "✅ Deployment successful"
+          EOF
+
+      - name: 🔍 Health Check
+        env:
+          VPS_URL: ${{ secrets.VPS_URL || 'https://axion.example.com' }}
+        run: |
+          sleep 5
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" $VPS_URL)
+          if [ $HTTP_CODE -eq 200 ]; then
+            echo "✅ Health check passed (HTTP $HTTP_CODE)"
+          else
+            echo "❌ Health check failed (HTTP $HTTP_CODE)"
+            exit 1
+          fi
+
+      - name: 📊 Deployment Summary
+        if: always()
+        run: |
+          echo "## 🚀 VPS Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Time:** $(date)" >> $GITHUB_STEP_SUMMARY
+
+      - name: 💬 Notify on Failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `❌ Deployment Failed: ${context.sha.substring(0, 7)}`,
+              body: `Deployment to VPS failed.\n\n**Commit:** ${context.sha}\n**Branch:** ${context.ref}\n**Actor:** @${context.actor}\n\n[View Logs](${context.payload.repository.html_url}/actions/runs/${context.runId})`,
+              labels: ['deployment', 'bug']
+            })

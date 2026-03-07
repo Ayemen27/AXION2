@@ -1,0 +1,66 @@
+#!/bin/bash
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AXION Git Hook — Pre-Commit
+# يشتغل قبل كل commit لتشغيل: linting, tests, formatting
+# ══════════════════════════════════════════════════════════════════════════════
+
+set -e
+
+echo ""
+echo "🪝 Running pre-commit hooks..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# ── 1. Code Linting ───────────────────────────────────────────────────────────
+echo "📋 Step 1/4: Linting code..."
+
+if command -v npm &> /dev/null; then
+  if [ -f "package.json" ]; then
+    if grep -q "\"lint\"" package.json; then
+      npm run lint || {
+        echo "❌ Linting failed. Fix errors before committing."
+        exit 1
+      }
+      echo "✅ Linting passed"
+    fi
+  fi
+fi
+
+# ── 2. TypeScript Check ───────────────────────────────────────────────────────
+echo "📋 Step 2/4: Checking TypeScript..."
+
+if [ -f "tsconfig.json" ]; then
+  if command -v tsc &> /dev/null; then
+    tsc --noEmit || {
+      echo "❌ TypeScript errors found. Fix before committing."
+      exit 1
+    }
+    echo "✅ TypeScript check passed"
+  fi
+fi
+
+# ── 3. Run Tests ──────────────────────────────────────────────────────────────
+echo "📋 Step 3/4: Running tests..."
+
+if [ -f "package.json" ]; then
+  if grep -q "\"test\"" package.json; then
+    npm test -- --watchAll=false --passWithNoTests || {
+      echo "❌ Tests failed. Fix before committing."
+      exit 1
+    }
+    echo "✅ Tests passed"
+  fi
+fi
+
+# ── 4. Format Code ────────────────────────────────────────────────────────────
+echo "📋 Step 4/4: Formatting code..."
+
+if command -v prettier &> /dev/null; then
+  git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(ts|tsx|js|jsx|json|css|md)$' | xargs prettier --write
+  git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(ts|tsx|js|jsx|json|css|md)$' | xargs git add
+  echo "✅ Code formatted"
+fi
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "✅ All pre-commit checks passed!"
+echo ""

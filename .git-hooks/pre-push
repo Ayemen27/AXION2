@@ -1,0 +1,63 @@
+#!/bin/bash
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AXION Git Hook — Pre-Push
+# يشتغل قبل كل push لتشغيل: tests, build check
+# ══════════════════════════════════════════════════════════════════════════════
+
+set -e
+
+echo ""
+echo "🪝 Running pre-push hooks..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# ── 1. Run All Tests ──────────────────────────────────────────────────────────
+echo "🧪 Step 1/3: Running all tests..."
+
+if [ -f "package.json" ]; then
+  if grep -q "\"test\"" package.json; then
+    npm test -- --watchAll=false || {
+      echo "❌ Tests failed. Fix before pushing."
+      exit 1
+    }
+    echo "✅ All tests passed"
+  fi
+fi
+
+# ── 2. Build Check ────────────────────────────────────────────────────────────
+echo "🏗️ Step 2/3: Checking build..."
+
+if [ -f "package.json" ]; then
+  if grep -q "\"build\"" package.json; then
+    npm run build || {
+      echo "❌ Build failed. Fix before pushing."
+      exit 1
+    }
+    echo "✅ Build successful"
+  fi
+fi
+
+# ── 3. Check for Large Files ──────────────────────────────────────────────────
+echo "📏 Step 3/3: Checking for large files..."
+
+MAX_SIZE=10485760  # 10MB in bytes
+
+large_files=$(find . -type f -size +10M -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null || true)
+
+if [ -n "$large_files" ]; then
+  echo "⚠️  Warning: Large files detected (>10MB):"
+  echo "$large_files"
+  echo ""
+  read -p "Continue push? (y/N): " -n 1 -r
+  echo ""
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "❌ Push cancelled"
+    exit 1
+  fi
+fi
+
+echo "✅ No large files"
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "✅ All pre-push checks passed!"
+echo ""

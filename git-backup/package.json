@@ -1,0 +1,22 @@
+{
+  "name": "axion-git-backup",
+  "version": "1.0.0",
+  "description": "AXION Git Backup System with Cloud Storage",
+  "main": "backup.js",
+  "scripts": {
+    "backup": "node backup.js",
+    "backup:s3": "node backup.js --storage=s3",
+    "backup:gdrive": "node backup.js --storage=gdrive",
+    "backup:dropbox": "node backup.js --storage=dropbox"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.1490.0",
+    "googleapis": "^128.0.0",
+    "dropbox": "^10.34.0",
+    "archiver": "^6.0.1",
+    "simple-git": "^3.20.0",
+    "dotenv": "^16.3.1",
+    "node-cron": "^3.0.3",
+    "crypto": "^1.0.1"
+  }
+}

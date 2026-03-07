@@ -1,0 +1,189 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# AXION — E2E Testing with Playwright
+# اختبارات شاملة قبل كل deployment
+# ══════════════════════════════════════════════════════════════════════════════
+
+name: E2E Tests
+
+on:
+  # Run before deployment
+  workflow_call:
+    inputs:
+      base_url:
+        required: false
+        type: string
+        default: 'http://localhost:5173'
+  
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'Base URL to test'
+        required: false
+        default: 'http://localhost:5173'
+  
+  # Run on PRs
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  # ── Install Playwright ─────────────────────────────────────────────────────
+  install:
+    name: 🎭 Install Playwright
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: 📚 Install Dependencies
+        run: npm ci
+
+      - name: 🎭 Install Playwright Browsers
+        run: npx playwright install --with-deps
+
+      - name: 💾 Cache Playwright
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+
+  # ── Run E2E Tests ──────────────────────────────────────────────────────────
+  test:
+    name: 🧪 Run E2E Tests
+    runs-on: ubuntu-latest
+    needs: install
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: 📚 Install Dependencies
+        run: npm ci
+
+      - name: 💾 Restore Playwright Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+
+      - name: 🎭 Install Playwright Browsers
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+
+      - name: 🏗️ Build Application
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+      - name: 🚀 Start Preview Server
+        run: |
+          npm run preview &
+          npx wait-on http://localhost:4173 -t 30000
+
+      - name: 🧪 Run Playwright Tests
+        run: npx playwright test --project=${{ matrix.browser }}
+        env:
+          PLAYWRIGHT_BASE_URL: ${{ inputs.base_url || 'http://localhost:4173' }}
+
+      - name: 📤 Upload Test Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-results-${{ matrix.browser }}
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 30
+
+      - name: 📊 Upload Test Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-${{ matrix.browser }}
+          path: playwright-report/
+          retention-days: 30
+
+  # ── Generate Summary ───────────────────────────────────────────────────────
+  summary:
+    name: 📊 Test Summary
+    runs-on: ubuntu-latest
+    needs: test
+    if: always()
+    
+    steps:
+      - name: 📥 Download All Artifacts
+        uses: actions/download-artifact@v4
+
+      - name: 📋 Generate Summary
+        run: |
+          echo "## 🧪 E2E Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Test Run:** $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Check if tests passed
+          if [ "${{ needs.test.result }}" == "success" ]; then
+            echo "✅ **All tests passed successfully**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Some tests failed — check artifacts for details**" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Browser Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Chromium: ${{ needs.test.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Firefox: ${{ needs.test.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- WebKit: ${{ needs.test.result }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: 💬 Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const testResult = '${{ needs.test.result }}';
+            const emoji = testResult === 'success' ? '✅' : '❌';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## ${emoji} E2E Test Results\n\n**Status:** ${testResult}\n\n[View Full Report](${context.payload.repository.html_url}/actions/runs/${context.runId})`
+            })
+
+  # ── Block Deployment on Failure ────────────────────────────────────────────
+  gate:
+    name: 🚦 Deployment Gate
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+      - name: ✅ Tests Passed
+        if: needs.test.result == 'success'
+        run: echo "✅ All E2E tests passed — deployment can proceed"
+
+      - name: ❌ Tests Failed
+        if: needs.test.result != 'success'
+        run: |
+          echo "❌ E2E tests failed — blocking deployment"
+          exit 1

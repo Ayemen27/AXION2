@@ -1,0 +1,62 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# AXION — Deploy with E2E Tests
+# نشر بعد اجتياز اختبارات E2E
+# ══════════════════════════════════════════════════════════════════════════════
+
+name: Deploy with E2E Tests
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  # ── Step 1: Run E2E Tests ──────────────────────────────────────────────────
+  e2e-tests:
+    name: 🧪 E2E Tests
+    uses: ./.github/workflows/e2e-tests.yml
+    secrets: inherit
+
+  # ── Step 2: Deploy to VPS (only if tests pass) ────────────────────────────
+  deploy:
+    name: 🚀 Deploy to VPS
+    needs: e2e-tests
+    uses: ./.github/workflows/deploy-vps.yml
+    secrets: inherit
+    
+  # ── Step 3: Verify Deployment ──────────────────────────────────────────────
+  verify:
+    name: ✅ Verify Deployment
+    runs-on: ubuntu-latest
+    needs: deploy
+    
+    steps:
+      - name: 🔍 Health Check
+        env:
+          VPS_URL: ${{ secrets.VPS_URL || 'https://axion.example.com' }}
+        run: |
+          echo "Checking deployment at: $VPS_URL"
+          
+          # Wait for deployment to settle
+          sleep 10
+          
+          # Check HTTP status
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" $VPS_URL)
+          
+          if [ $HTTP_CODE -eq 200 ]; then
+            echo "✅ Deployment successful (HTTP $HTTP_CODE)"
+          else
+            echo "❌ Deployment failed (HTTP $HTTP_CODE)"
+            exit 1
+          fi
+
+      - name: 📊 Summary
+        run: |
+          echo "## ✅ Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**E2E Tests:** Passed ✓" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployment:** Successful ✓" >> $GITHUB_STEP_SUMMARY
+          echo "**Health Check:** Passed ✓" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Live URL:** ${{ secrets.VPS_URL }}" >> $GITHUB_STEP_SUMMARY

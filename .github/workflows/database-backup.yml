@@ -1,0 +1,76 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# AXION — Automated Database Backup
+# نسخ احتياطي تلقائي من قاعدة البيانات (يومي)
+# ══════════════════════════════════════════════════════════════════════════════
+
+name: Database Backup
+
+on:
+  schedule:
+    # يشتغل كل يوم الساعة 2 صباحاً UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch: # يسمح بالتشغيل اليدوي
+
+jobs:
+  backup:
+    name: 💾 PostgreSQL Backup
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 🔑 Setup SSH Key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+
+      - name: 💾 Create Backup
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          DB_NAME: ${{ secrets.DB_NAME || 'axion_db' }}
+          DB_USER: ${{ secrets.DB_USER || 'axion_user' }}
+        run: |
+          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST << 'EOF'
+            set -e
+            BACKUP_DIR="/backups/axion"
+            DATE=$(date +%Y%m%d_%H%M%S)
+            
+            # إنشاء مجلد النسخ إذا لم يكن موجوداً
+            mkdir -p $BACKUP_DIR
+            
+            # نسخ احتياطي من قاعدة البيانات
+            pg_dump -U $DB_USER $DB_NAME > $BACKUP_DIR/axion_db_$DATE.sql
+            
+            # ضغط النسخة الاحتياطية
+            gzip $BACKUP_DIR/axion_db_$DATE.sql
+            
+            # حذف النسخ الاحتياطية القديمة (أكثر من 30 يوم)
+            find $BACKUP_DIR -name "*.sql.gz" -type f -mtime +30 -delete
+            
+            # إحصائيات
+            BACKUP_SIZE=$(du -h $BACKUP_DIR/axion_db_$DATE.sql.gz | cut -f1)
+            BACKUP_COUNT=$(ls -1 $BACKUP_DIR/*.sql.gz 2>/dev/null | wc -l)
+            
+            echo "✅ Backup created: axion_db_$DATE.sql.gz"
+            echo "📦 Size: $BACKUP_SIZE"
+            echo "📊 Total backups: $BACKUP_COUNT"
+          EOF
+
+      - name: 📊 Backup Summary
+        run: |
+          echo "## 💾 Database Backup" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Date:** $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: 💬 Notify on Failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `❌ Database Backup Failed`,
+              body: `Automated database backup failed.\n\n**Date:** ${new Date().toISOString()}\n\n[View Logs](${context.payload.repository.html_url}/actions/runs/${context.runId})`,
+              labels: ['backup', 'database', 'critical']
+            })
